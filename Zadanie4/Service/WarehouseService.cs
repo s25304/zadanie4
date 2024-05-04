@@ -1,4 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc.Formatters;
+using System.Data.Common;
 using System.Data.SqlClient;
 using Zadanie4.DTO;
 using Zadanie4.Model;
@@ -55,7 +56,6 @@ namespace Zadanie4.Service
             }
 
             var product = await productRepository.getById(source.IdProduct);
-            orderRepository.updateFulfilledColumn(order.IdOrder);
 
             var result = new ProductWarehouse(
                 order.IdProduct,
@@ -66,9 +66,48 @@ namespace Zadanie4.Service
                 (source.Amount * product.price),
                 source.CreatedAt
                 );
-            productWarehouseRepository.create(result);
+
+            addProductToWarehouse(result, order.IdOrder);
 
             return result.IdProductWarehouse;
+        }
+
+
+        private async void addProductToWarehouse(ProductWarehouse src, int IdOrder)
+        {   //transactional
+            await using var con = new SqlConnection(_configuration["ConnectionStrings:DefaultConnection"]);
+
+            await using var cmd = new SqlCommand("update  Order  set fulfilledAt = Date.now() where IdOrder=@IdOrder", con);
+            cmd.Parameters.AddWithValue("@IdOrder", IdOrder);
+
+            await con.OpenAsync();
+            DbTransaction tran = await con.BeginTransactionAsync();
+            cmd.Transaction = (SqlTransaction)tran;
+
+            try
+            {
+                await cmd.ExecuteNonQueryAsync();
+                cmd.Parameters.Clear();
+
+                cmd.CommandText = "Insert Into ProductWarehouse(IdProductWarehouse, IdWarehouse, IdProduct, IdOrder,  Amount, Price, createdAt )" +
+                " Values(@IdProductWarehouse ,@IdWarehouse, @IdProduct, @IdOrder, @Amount, @Price, Date.now())";
+
+                cmd.Parameters.AddWithValue("@IdProductWarehouse", src.IdProductWarehouse);
+                cmd.Parameters.AddWithValue("@IdWarehouse", src.IdWarehouse);
+                cmd.Parameters.AddWithValue("@IdProduct", src.IdProduct);
+                cmd.Parameters.AddWithValue("@IdOrder", src.IdOrder);
+                cmd.Parameters.AddWithValue("@Amount", src.Amount);
+                cmd.Parameters.AddWithValue("@Price", src.Price);
+
+                await cmd.ExecuteReaderAsync();
+
+                await tran.CommitAsync();
+            } catch(Exception ex)
+            {
+                await tran.RollbackAsync();
+                throw new Exception(ex);
+            }
+            
         }
         private void validate(WarehouseProductDto src)
         {
